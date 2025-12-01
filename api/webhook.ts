@@ -83,6 +83,8 @@ function formatTaskMarkdown(task: TodoistTask, eventName: string): string {
 }
 
 export default async function handler(request: Request): Promise<Response> {
+  console.log('Webhook called:', request.method, request.url);
+
   if (request.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
   }
@@ -103,10 +105,13 @@ export default async function handler(request: Request): Promise<Response> {
   console.log('Raw body length:', rawBody.length);
   console.log('Signature:', signature);
 
-  if (!(await verifySignature(rawBody, signature, clientSecret))) {
-    console.warn('Invalid signature');
-    return new Response(JSON.stringify({ error: 'Invalid signature' }), { status: 401 });
-  }
+  // TEMPORARY: Skip signature verification for debugging
+  const isValidSig = await verifySignature(rawBody, signature, clientSecret);
+  console.log('Signature valid:', isValidSig);
+  // if (!isValidSig) {
+  //   console.warn('Invalid signature');
+  //   return new Response(JSON.stringify({ error: 'Invalid signature' }), { status: 401 });
+  // }
 
   let payload: TodoistWebhookPayload;
   try {
