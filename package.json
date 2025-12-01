@@ -7,12 +7,16 @@
     "dev": "vercel dev",
     "build": "tsc",
     "register-webhook": "tsx scripts/register-webhook.ts",
+    "list-webhooks": "tsx scripts/register-webhook.ts list",
     "typecheck": "tsc --noEmit"
   },
   "keywords": ["todoist", "capacities", "webhook", "vercel"],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.15.0",
+  "dependencies": {
+    "dotenv": "^16.3.0"
+  },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@vercel/node": "^3.0.0",
