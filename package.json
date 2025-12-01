@@ -1,0 +1,22 @@
+{
+  "name": "todoist-capacities-webhook",
+  "version": "1.0.0",
+  "description": "Vercel serverless function that syncs Todoist tasks to Capacities daily notes",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc",
+    "register-webhook": "tsx scripts/register-webhook.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["todoist", "capacities", "webhook", "vercel"],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.15.0",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@vercel/node": "^3.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
