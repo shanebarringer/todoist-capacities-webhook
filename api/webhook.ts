@@ -90,8 +90,9 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   const clientSecret = process.env.TODOIST_CLIENT_SECRET;
-  const capacitiesToken = process.env.CAPACITIES_API_TOKEN;
-  const spaceId = process.env.CAPACITIES_SPACE_ID;
+  // TEMP: Hardcode to test - env vars may have whitespace issues
+  const capacitiesToken = process.env.CAPACITIES_API_TOKEN?.trim() || 'AdZ7wsmlDIrvfps39Ueh9HxhcKhNIjBvg6HgKPugTdomP62ZaG';
+  const spaceId = process.env.CAPACITIES_SPACE_ID?.trim() || 'e03a27f0-4be6-4713-8c3e-5717788fc4a9';
 
   console.log('Env check:', {
     hasClientSecret: !!clientSecret,
