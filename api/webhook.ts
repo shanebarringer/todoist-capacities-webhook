@@ -93,6 +93,14 @@ export default async function handler(request: Request): Promise<Response> {
   const capacitiesToken = process.env.CAPACITIES_API_TOKEN;
   const spaceId = process.env.CAPACITIES_SPACE_ID;
 
+  console.log('Env check:', {
+    hasClientSecret: !!clientSecret,
+    hasCapacitiesToken: !!capacitiesToken,
+    hasSpaceId: !!spaceId,
+    spaceIdLength: spaceId?.length,
+    tokenLength: capacitiesToken?.length,
+  });
+
   if (!clientSecret || !capacitiesToken || !spaceId) {
     console.error('Missing env vars');
     return new Response(JSON.stringify({ error: 'Server config error' }), { status: 500 });
@@ -138,10 +146,12 @@ export default async function handler(request: Request): Promise<Response> {
       body: JSON.stringify({ spaceId, mdText: markdown }),
     });
 
+    const responseText = await res.text();
+    console.log('Capacities response:', { status: res.status, body: responseText });
+
     if (!res.ok) {
-      const err = await res.text();
-      console.error('Capacities error:', err);
-      return new Response(JSON.stringify({ error: 'Capacities API error' }), { status: 500 });
+      console.error('Capacities error:', res.status, responseText);
+      return new Response(JSON.stringify({ error: 'Capacities API error', details: responseText }), { status: 500 });
     }
 
     console.log(`Synced ${event_name}: ${event_data.content}`);
