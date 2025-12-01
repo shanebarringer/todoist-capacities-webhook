@@ -1,12 +1,8 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import {
-  verifyTodoistSignature,
-  getSignatureFromHeaders,
-  parseWebhookPayload,
-} from '../lib/todoist.js';
-import { formatTaskAsMarkdown, saveToDailyNote } from '../lib/capacities.js';
+// Edge runtime gives us access to raw request body
+export const config = {
+  runtime: 'edge',
+};
 
-// Events we want to handle
 const SUPPORTED_EVENTS = new Set([
   'item:added',
   'item:updated',
@@ -15,102 +11,138 @@ const SUPPORTED_EVENTS = new Set([
   'item:deleted',
 ]);
 
-/**
- * Read the raw request body as a string.
- * Must read from stream to get exact bytes for HMAC verification.
- */
-async function getRawBody(req: VercelRequest): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-
-    req.on('data', (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      resolve(Buffer.concat(chunks).toString('utf-8'));
-    });
-
-    req.on('error', reject);
-  });
+interface TodoistTask {
+  id: string;
+  content: string;
+  description: string;
+  project_id: string;
+  priority: 1 | 2 | 3 | 4;
+  due?: { date: string; datetime?: string; is_recurring?: boolean };
+  labels: string[];
+  checked: boolean;
+  completed_at?: string;
 }
 
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse
-): Promise<void> {
-  // Only accept POST requests
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
+interface TodoistWebhookPayload {
+  event_name: string;
+  user_id: string;
+  event_data: TodoistTask;
+}
+
+async function verifySignature(rawBody: string, signature: string | null, secret: string): Promise<boolean> {
+  if (!signature) return false;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const signatureBytes = await crypto.subtle.sign('HMAC', key, encoder.encode(rawBody));
+  const expected = btoa(String.fromCharCode(...new Uint8Array(signatureBytes)));
+
+  return expected === signature;
+}
+
+function getPriorityLabel(priority: number): string {
+  const labels: Record<number, string> = { 4: 'Urgent', 3: 'High', 2: 'Medium', 1: 'Normal' };
+  return labels[priority] || 'Normal';
+}
+
+function formatTaskMarkdown(task: TodoistTask, eventName: string): string {
+  const lines: string[] = [];
+
+  if (eventName === 'item:completed') {
+    lines.push('### Task Completed', '', `~~${task.content}~~`);
+    if (task.completed_at) {
+      lines.push('', `- **Completed:** ${new Date(task.completed_at).toLocaleString()}`);
+    }
+  } else if (eventName === 'item:added') {
+    lines.push('### New Task Added', '', `**${task.content}**`);
+  } else if (eventName === 'item:updated') {
+    lines.push('### Task Updated', '', `**${task.content}**`);
+  } else {
+    lines.push(`### Task Event: ${eventName}`, '', `**${task.content}**`);
   }
 
-  // Get required environment variables
+  if (eventName !== 'item:completed') {
+    if (task.priority > 1) lines.push(`- **Priority:** ${getPriorityLabel(task.priority)}`);
+    if (task.due) {
+      const dueStr = task.due.datetime || task.due.date;
+      lines.push(`- **Due:** ${dueStr}${task.due.is_recurring ? ' (recurring)' : ''}`);
+    }
+    if (task.labels?.length) lines.push(`- **Labels:** ${task.labels.join(', ')}`);
+    if (task.description?.trim()) lines.push('', '> ' + task.description.split('\n').join('\n> '));
+  }
+
+  lines.push('', '---', '');
+  return lines.join('\n');
+}
+
+export default async function handler(request: Request): Promise<Response> {
+  if (request.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+  }
+
   const clientSecret = process.env.TODOIST_CLIENT_SECRET;
   const capacitiesToken = process.env.CAPACITIES_API_TOKEN;
   const spaceId = process.env.CAPACITIES_SPACE_ID;
 
   if (!clientSecret || !capacitiesToken || !spaceId) {
-    console.error('Missing required environment variables');
-    res.status(500).json({ error: 'Server configuration error' });
-    return;
+    console.error('Missing env vars');
+    return new Response(JSON.stringify({ error: 'Server config error' }), { status: 500 });
   }
 
-  // Get raw body for HMAC verification
-  const rawBody = await getRawBody(req);
+  // Get raw body text from Edge request
+  const rawBody = await request.text();
+  const signature = request.headers.get('x-todoist-hmac-sha256');
 
-  // Verify HMAC signature
-  const signature = getSignatureFromHeaders(
-    req.headers as Record<string, string | string[] | undefined>
-  );
+  console.log('Raw body length:', rawBody.length);
+  console.log('Signature:', signature);
 
-  // Debug logging
-  console.log('Body type:', typeof req.body);
-  console.log('Raw body (first 100):', rawBody.substring(0, 100));
-  console.log('Signature received:', signature);
-
-  if (!verifyTodoistSignature(rawBody, signature, clientSecret)) {
-    console.warn('Invalid webhook signature');
-    res.status(401).json({ error: 'Invalid signature' });
-    return;
+  if (!(await verifySignature(rawBody, signature, clientSecret))) {
+    console.warn('Invalid signature');
+    return new Response(JSON.stringify({ error: 'Invalid signature' }), { status: 401 });
   }
 
-  // Parse the webhook payload
-  let payload;
+  let payload: TodoistWebhookPayload;
   try {
-    payload = parseWebhookPayload(rawBody);
-  } catch (error) {
-    console.error('Failed to parse webhook payload:', error);
-    res.status(400).json({ error: 'Invalid payload' });
-    return;
+    payload = JSON.parse(rawBody);
+  } catch {
+    return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400 });
   }
 
   const { event_name, event_data } = payload;
 
-  // Check if this is an event we handle
   if (!SUPPORTED_EVENTS.has(event_name)) {
-    // Acknowledge but don't process
-    res.status(200).json({ status: 'ignored', event: event_name });
-    return;
+    return new Response(JSON.stringify({ status: 'ignored', event: event_name }), { status: 200 });
   }
 
-  // Format the task as markdown
-  const markdown = formatTaskAsMarkdown(event_data, event_name);
+  const markdown = formatTaskMarkdown(event_data, event_name);
 
-  // Send to Capacities
   try {
-    await saveToDailyNote(markdown, capacitiesToken, spaceId);
-    console.log(`Successfully synced ${event_name} for task: ${event_data.content}`);
-    res.status(200).json({ status: 'ok', event: event_name });
+    const res = await fetch('https://api.capacities.io/save-to-daily-note', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${capacitiesToken}`,
+      },
+      body: JSON.stringify({ spaceId, mdText: markdown }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error('Capacities error:', err);
+      return new Response(JSON.stringify({ error: 'Capacities API error' }), { status: 500 });
+    }
+
+    console.log(`Synced ${event_name}: ${event_data.content}`);
+    return new Response(JSON.stringify({ status: 'ok', event: event_name }), { status: 200 });
   } catch (error) {
-    console.error('Failed to save to Capacities:', error);
-    res.status(500).json({ error: 'Failed to save to Capacities' });
+    console.error('Error:', error);
+    return new Response(JSON.stringify({ error: 'Failed to save' }), { status: 500 });
   }
 }
-
-// Disable body parsing to get raw body for HMAC verification
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
