@@ -17,7 +17,9 @@ import { config } from 'dotenv';
 // Load environment variables from .env.local
 config({ path: '.env.local' });
 
-const TODOIST_WEBHOOK_API = 'https://api.todoist.com/sync/v9/webhooks';
+// Try both endpoints - v1 is the new unified API, v9 is deprecated
+const TODOIST_WEBHOOK_API_V1 = 'https://api.todoist.com/api/v1/webhooks';
+const TODOIST_WEBHOOK_API_V9 = 'https://api.todoist.com/sync/v9/webhooks';
 
 interface WebhookResponse {
   id?: string;
@@ -29,6 +31,7 @@ interface WebhookResponse {
 async function registerWebhook(): Promise<void> {
   const clientId = process.env.TODOIST_CLIENT_ID;
   const clientSecret = process.env.TODOIST_CLIENT_SECRET;
+  const apiToken = process.env.TODOIST_API_TOKEN;
   const webhookUrl = process.env.WEBHOOK_URL;
 
   // Validate required environment variables
@@ -46,6 +49,10 @@ async function registerWebhook(): Promise<void> {
     console.error('Example: https://your-app.vercel.app/api/webhook');
     process.exit(1);
   }
+  if (!apiToken) {
+    console.error('Error: TODOIST_API_TOKEN is not set');
+    process.exit(1);
+  }
 
   // Events to subscribe to
   const events = [
@@ -61,18 +68,39 @@ async function registerWebhook(): Promise<void> {
   console.log(`  Events: ${events.join(', ')}`);
 
   try {
-    const response = await fetch(TODOIST_WEBHOOK_API, {
+    // Try v1 API first with JSON body
+    console.log('\nTrying API v1...');
+    let response = await fetch(TODOIST_WEBHOOK_API_V1, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiToken}`,
       },
-      body: new URLSearchParams({
+      body: JSON.stringify({
         client_id: clientId,
         client_secret: clientSecret,
         url: webhookUrl,
-        events: JSON.stringify(events),
+        events: events,
       }),
     });
+
+    // If v1 fails, try v9 with form data
+    if (!response.ok) {
+      console.log('API v1 failed, trying Sync API v9...');
+      response = await fetch(TODOIST_WEBHOOK_API_V9, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Bearer ${apiToken}`,
+        },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          url: webhookUrl,
+          events: JSON.stringify(events),
+        }),
+      });
+    }
 
     const data = (await response.json()) as WebhookResponse;
 

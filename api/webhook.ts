@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { Readable } from 'stream';
 import {
   verifyTodoistSignature,
   getSignatureFromHeaders,
@@ -17,30 +16,23 @@ const SUPPORTED_EVENTS = new Set([
 ]);
 
 /**
- * Read the raw request body as a string
+ * Read the raw request body as a string.
+ * Must read from stream to get exact bytes for HMAC verification.
  */
 async function getRawBody(req: VercelRequest): Promise<string> {
-  // If body is already available (Vercel may pre-parse even with bodyParser: false)
-  if (typeof req.body === 'string') {
-    return req.body;
-  }
-  if (Buffer.isBuffer(req.body)) {
-    return req.body.toString('utf-8');
-  }
-  if (req.body && typeof req.body === 'object') {
-    // Already parsed as JSON - stringify back (may differ from original)
-    return JSON.stringify(req.body);
-  }
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
 
-  // Read from stream
-  const chunks: Buffer[] = [];
-  const readable = req as unknown as Readable;
+    req.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
 
-  for await (const chunk of readable) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-  }
+    req.on('end', () => {
+      resolve(Buffer.concat(chunks).toString('utf-8'));
+    });
 
-  return Buffer.concat(chunks).toString('utf-8');
+    req.on('error', reject);
+  });
 }
 
 export default async function handler(
@@ -71,6 +63,11 @@ export default async function handler(
   const signature = getSignatureFromHeaders(
     req.headers as Record<string, string | string[] | undefined>
   );
+
+  // Debug logging
+  console.log('Body type:', typeof req.body);
+  console.log('Raw body (first 100):', rawBody.substring(0, 100));
+  console.log('Signature received:', signature);
 
   if (!verifyTodoistSignature(rawBody, signature, clientSecret)) {
     console.warn('Invalid webhook signature');
